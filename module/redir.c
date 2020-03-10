@@ -13,7 +13,6 @@
 #include <asm/pgtable.h>
 #include <linux/mutex.h>
 #include <linux/syscalls.h>
-#include <asm/highmem.h>
 
 MODULE_LICENSE("GPL");
 
