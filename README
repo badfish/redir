@@ -1,0 +1,36 @@
+This module is a continuation of the 'redir' module
+that was provided with previous version of 'avfs'.
+The latter stopped working when the kernel no
+longer exported the 'sys_call_table' symbol.
+
+In the current code we make use of two possible methods
+for obtaining the address of the system call table:
+
+1. The kallsyms_lookup_name() function will give us the
+address of any public symbol in the kernel. This depends on
+the kernel being compiled with 'CONFIG_KALLSYMS=y', but this
+is the case for all the (debian-based) kernels I have examined.
+
+2. The i386 kernel does not expose the sys_call_table
+symbol, even to kallsyms_lookup_name(), so we search
+for it in the code of the int 80 handler. I have
+tried to find similar code for other architectures
+in case the public symbol disappears from them too.
+
+Usage
+=====
+
+1. Mount the avfs file system on /.avfs (see the mountavfs
+script). The mount point /.avfs is currently hard-coded
+in the redir module: I changed it from /overlay
+as I was using that for something else.
+
+2. Load the module.
+
+3. Source the avfsfuse.sh script thusly:
+	. ./avfsfuse.sh
+and then use the commamds 'avfs-on' and 'avfs-off' to turn it on and off.
+
+Then you can type things like:
+	ls test.tar#
+to view the contents of a tar file, even outside of the avfs mount.
