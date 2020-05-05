@@ -1,18 +1,18 @@
-#include <linux/version.h>
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/unistd.h>
-#include <linux/slab.h>
+#include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/fs_struct.h>
-#include <asm/uaccess.h>
-#include <linux/ptrace.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/mount.h>
-#include <linux/namei.h>
-#include <linux/file.h>
-#include <asm/pgtable.h>
 #include <linux/mutex.h>
+#include <linux/namei.h>
+#include <linux/ptrace.h>
+#include <linux/slab.h>
 #include <linux/syscalls.h>
+#include <linux/unistd.h>
+#include <linux/version.h>
+#include <asm/pgtable.h>
+#include <asm/uaccess.h>
 
 MODULE_LICENSE("GPL");
 
@@ -28,23 +28,40 @@ MODULE_LICENSE("GPL");
 #define FUSE_SUPER_MAGIC 0x65735546
 #define AVFS_SUPER_MAGIC FUSE_SUPER_MAGIC
 
-#if defined(__x86_64__) || defined(__aarch64__)
+#if defined(__x86_64__)
+#define USE_64BIT_WRAPPERS 1
+#define PARAM1 di
+#define PARAM2 si
+#define PARAM3 dx
+#define PARAM4 r10
+#endif
+
+#if defined(__aarch64__)
+#define USE_64BIT_WRAPPERS 1
+#define PARAM1 regs[0]
+#define PARAM2 regs[1]
+#define PARAM3 regs[2]
+#define PARAM4 regs[3]
+#endif
+
+#if defined(USE_64BIT_WRAPPERS)
 typedef asmlinkage long orig_func(char *,...);
 typedef asmlinkage long orig_funcat(int dirfd, char *,...);
 typedef asmlinkage long (*x64_orig_func)(struct pt_regs *regs);
-#define PROCESS(name) \
+#define PROCESS(name, nargs) \
 	static x64_orig_func x64_orig_##name; \
 	static orig_func orig_##name;
-#define PROCESSAT(name) \
+#define PROCESSAT(name, nargs) \
 	static x64_orig_func x64_orig_##name; \
 	static orig_funcat orig_##name;
 #else
 typedef asmlinkage long (*orig_func)(char *,...);
 typedef asmlinkage long (*orig_funcat)(int dirfd, char *,...);
-#define PROCESS(name) static orig_func orig_##name;
-#define PROCESSAT(name) static orig_funcat orig_##name;
+#define PROCESS(name, nargs) static orig_func orig_##name;
+#define PROCESSAT(name, nargs) static orig_funcat orig_##name;
 #endif
 #include "list.h"
+#include "need.h"
 
 #define AVFS_MAGIC_CHAR '#'
 #define OVERLAY_DIR "/.avfs"
@@ -338,6 +355,10 @@ static long virt_generic(do_orig_func orig, int follow, int dirfd, char *path, v
 	mm_segment_t old_fs;
 	char *newpath;
 
+	if (task_pid_nr(rcu_dereference(current->real_parent))  == 1) {
+		return (*orig)(dirfd, path, buf, param1, param2);
+	}
+
 	if (!cwd_virtual(dirfd)) {
 		ret = (*orig)(dirfd, path, buf, param1, param2);
 		if (ret != -ENOENT)
@@ -394,7 +415,7 @@ static long virt_generic(do_orig_func orig, int follow, int dirfd, char *path, v
 	return ret;
 }
 
-#if ! defined(__aarch64__)
+#if defined(NEED_open)
 
 static long do_orig_open(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -406,7 +427,16 @@ asmlinkage long virt_open(char *pathname, int flags, mode_t mode)
 	return virt_generic(do_orig_open, 1, AT_FDCWD, pathname, NULL, NULL, flags, mode);
 }
 
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_open(struct pt_regs *regs) // (char *pathname, int flags, mode_t mode)
+{
+	return virt_open((char *)regs->PARAM1, (int)regs->PARAM2, (mode_t)regs->PARAM3);
+}
 #endif
+
+#endif
+
+#if defined(NEED_chdir)
 
 static long do_orig_chdir(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -418,7 +448,16 @@ asmlinkage long virt_chdir(char *path)
 	return virt_generic(do_orig_chdir, 1, AT_FDCWD, path, NULL, NULL, 0, 0);
 }
 
-#if defined(__i386__)
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_chdir(struct pt_regs *regs) // (char *path)
+{
+	return virt_chdir((char *)regs->PARAM1);
+}
+#endif
+
+#endif
+
+#if defined(NEED_oldstat)
 
 static long do_orig_oldstat(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -431,9 +470,16 @@ asmlinkage long virt_oldstat(char *path, struct __old_kernel_stat *statbuf)
 	return virt_generic(do_orig_oldstat, 1, AT_FDCWD, path, statbuf, &locbuf, sizeof(struct __old_kernel_stat), 0);
 }
 
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_oldstat(struct pt_regs *regs) // (char *path, struct __old_kernel_stat *statbuf)
+{
+	return virt_oldstat((char *)regs->PARAM1, (struct __old_kernel_stat *)regs->PARAM2);
+}
 #endif
 
-#if ! defined(__aarch64__)
+#endif
+
+#if defined(NEED_access)
 
 static long do_orig_access(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -445,9 +491,16 @@ asmlinkage long virt_access(char *path, int amode)
 	return virt_generic(do_orig_access, 1, AT_FDCWD, path, NULL, NULL, amode, 0);
 }
 
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_access(struct pt_regs *regs) // (char *path, int amode)
+{
+	return virt_access((char *)regs->PARAM1, (int)regs->PARAM2);
+}
 #endif
 
-#if defined(__i386__)
+#endif
+
+#if defined(NEED_oldlstat)
 
 static long do_orig_oldlstat(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -460,9 +513,16 @@ asmlinkage long virt_oldlstat(char *path, struct __old_kernel_stat *statbuf)
 	return virt_generic(do_orig_oldlstat, 0, AT_FDCWD, path, statbuf, &locbuf, sizeof(struct __old_kernel_stat), 0);
 }
 
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_oldlstat(struct pt_regs *regs) // (char *path, struct __old_kernel_stat *statbuf)
+{
+	return virt_oldlstat((char *)regs->PARAM1, (struct __old_kernel_stat *)regs->PARAM2);
+}
 #endif
 
-#if ! defined(__aarch64__)
+#endif
+
+#if defined(NEED_readlink)
 
 static long do_orig_readlink(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -473,6 +533,17 @@ asmlinkage long virt_readlink(char *path, char *buf, int bufsiz)
 {
 	return virt_generic(do_orig_readlink, 0, AT_FDCWD, path, buf, (void *)-1, bufsiz, 0);
 }
+
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_readlink(struct pt_regs *regs) // (char *path, char *buf, int bufsiz)
+{
+	return virt_readlink((char *)regs->PARAM1, (char *)regs->PARAM2, (int)regs->PARAM3);
+}
+#endif
+
+#endif
+
+#if defined(NEED_stat)
 
 static long do_orig_stat(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -485,6 +556,17 @@ asmlinkage long virt_stat(char *path, struct stat *statbuf)
 	return virt_generic(do_orig_stat, 1, AT_FDCWD, path, statbuf, &locbuf, sizeof(struct stat), 0);
 }
 
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_stat(struct pt_regs *regs) // (char *path, struct stat *statbuf)
+{
+	return virt_stat((char *)regs->PARAM1, (struct stat *)regs->PARAM2);
+}
+#endif
+
+#endif
+
+#if defined(NEED_lstat)
+
 static long do_orig_lstat(int dirfd, char *path, void *buf, int param1, long param2)
 {
 	return orig_lstat(path, buf);
@@ -496,7 +578,16 @@ asmlinkage long virt_lstat(char *path, struct stat *statbuf)
 	return virt_generic(do_orig_lstat, 0, AT_FDCWD, path, statbuf, &locbuf, sizeof(struct stat), 0);
 }
 
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_lstat(struct pt_regs *regs) // (char *path, struct stat *statbuf)
+{
+	return virt_lstat((char *)regs->PARAM1, (struct stat *)regs->PARAM2);
+}
 #endif
+
+#endif
+
+#if defined(NEED_getcwd)
 
 asmlinkage long virt_getcwd(char *buf, ulong size)
 {
@@ -545,7 +636,16 @@ asmlinkage long virt_getcwd(char *buf, ulong size)
 	return ret;
 }
 
-#if defined(__i386__) || defined(__arm__)
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_getcwd(struct pt_regs *regs) // (char *buf, ulong size)
+{
+	return virt_getcwd((char *)regs->PARAM1, (ulong)regs->PARAM2);
+}
+#endif
+
+#endif
+
+#if defined(NEED_stat64)
 
 static long do_orig_stat64(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -558,6 +658,17 @@ asmlinkage long virt_stat64(char *path, struct stat64 *statbuf)
 	return virt_generic(do_orig_stat64, 1, AT_FDCWD, path, statbuf, &locbuf, sizeof(struct stat64), 0);
 }
 
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_stat64(struct pt_regs *regs) // (char *path, struct stat64 *statbuf)
+{
+	return virt_stat64((char *)regs->PARAM1, (struct stat64 *)regs->PARAM2);
+}
+#endif
+
+#endif
+
+#if defined(NEED_lstat64)
+
 static long do_orig_lstat64(int dirfd, char *path, void *buf, int param1, long param2)
 {
 	return orig_lstat64(path, buf, param2);
@@ -569,7 +680,16 @@ asmlinkage long virt_lstat64(char *path, struct stat64 *statbuf, long flags)
 	return virt_generic(do_orig_lstat64, 0, AT_FDCWD, path, statbuf, &locbuf, sizeof(struct stat64), flags);
 }
 
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_lstat64(struct pt_regs *regs) // (char *path, struct stat64 *statbuf, long flags)
+{
+	return virt_lstat64((char *)regs->PARAM1, (struct stat64 *)regs->PARAM2, (long)regs->PARAM3);
+}
 #endif
+
+#endif
+
+#if defined(NEED_getxattr)
 
 static long do_orig_getxattr(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -581,6 +701,17 @@ asmlinkage long virt_getxattr(char *path, char *name, void *value, ulong size)
 	return virt_generic(do_orig_getxattr, 1, AT_FDCWD, path, value, NULL, size, (long)name);
 }
 
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_getxattr(struct pt_regs *regs) // (char *path, char *name, void *value, ulong size)
+{
+	return virt_getxattr((char *)regs->PARAM1, (char *)regs->PARAM2, (void *)regs->PARAM3, (ulong)regs->PARAM4);
+}
+#endif
+
+#endif
+
+#if defined(NEED_lgetxattr)
+
 static long do_orig_lgetxattr(int dirfd, char *path, void *buf, int param1, long param2)
 {
 	return orig_lgetxattr(path, param2, buf, param1);
@@ -590,6 +721,17 @@ asmlinkage long virt_lgetxattr(char *path, char *name, void *value, size_t size)
 {
 	return virt_generic(do_orig_lgetxattr, 0, AT_FDCWD, path, value, NULL, size, (long)name);
 }
+
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_lgetxattr(struct pt_regs *regs) // (char *path, char *name, void *value, size_t size)
+{
+	return virt_lgetxattr((char *)regs->PARAM1, (char *)regs->PARAM2, (void *)regs->PARAM3, (size_t)regs->PARAM4);
+}
+#endif
+
+#endif
+
+#if defined(NEED_listxattr)
 
 static long do_orig_listxattr(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -601,6 +743,17 @@ asmlinkage long virt_listxattr(char *path, char *list, size_t size)
 	return virt_generic(do_orig_listxattr, 1, AT_FDCWD, path, list, NULL, size, 0);
 }
 
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_listxattr(struct pt_regs *regs) // (char *path, char *list, size_t size)
+{
+	return virt_listxattr((char *)regs->PARAM1, (char *)regs->PARAM2, (size_t)regs->PARAM3);
+}
+#endif
+
+#endif
+
+#if defined(NEED_llistxattr)
+
 static long do_orig_llistxattr(int dirfd, char *path, void *buf, int param1, long param2)
 {
 	return orig_llistxattr(path, buf, param1);
@@ -610,6 +763,17 @@ asmlinkage long virt_llistxattr(char *path, char *list, size_t size)
 {
 	return virt_generic(do_orig_llistxattr, 0, AT_FDCWD, path, list, NULL, size, 0);
 }
+
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_llistxattr(struct pt_regs *regs) // (char *path, char *list, size_t size)
+{
+	return virt_llistxattr((char *)regs->PARAM1, (char *)regs->PARAM2, (size_t)regs->PARAM3);
+}
+#endif
+
+#endif
+
+#if defined(NEED_openat)
 
 static long do_orig_openat(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -621,7 +785,16 @@ asmlinkage long virt_openat(int dirfd, char *pathname, int flags, mode_t mode)
 	return virt_generic(do_orig_openat, 1, dirfd, pathname, NULL, NULL, flags, mode);
 }
 
-#if defined(__i386__) || defined(__arm__)
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_openat(struct pt_regs *regs) // (int dirfd, char *pathname, int flags, mode_t mode)
+{
+	return virt_openat((int)regs->PARAM1, (char *)regs->PARAM2, (int)regs->PARAM3, (mode_t)regs->PARAM4);
+}
+#endif
+
+#endif
+
+#if defined(NEED_fstatat64)
 
 static long do_orig_fstatat64(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -634,9 +807,16 @@ asmlinkage long virt_fstatat64(int dirfd, char *path, struct stat *statbuf, int 
 	return virt_generic(do_orig_fstatat64, (flag & AT_SYMLINK_NOFOLLOW)==0, dirfd, path, statbuf, &locbuf, sizeof(struct stat), flag);
 }
 
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_fstatat64(struct pt_regs *regs) // (int dirfd, char *path, struct stat *statbuf, int flag)
+{
+	return virt_fstatat64((int)regs->PARAM1, (char *)regs->PARAM2, (struct stat *)regs->PARAM3, (int)regs->PARAM4);
+}
 #endif
 
-#if defined(__x86_64__) || defined(__aarch64__)
+#endif
+
+#if defined(NEED_newfstatat)
 
 static long do_orig_newfstatat(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -649,7 +829,16 @@ asmlinkage long virt_newfstatat(int dirfd, char *path, struct stat *statbuf, int
 	return virt_generic(do_orig_newfstatat, (flag & AT_SYMLINK_NOFOLLOW)==0, dirfd, path, statbuf, &locbuf, sizeof(struct stat), flag);
 }
 
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_newfstatat(struct pt_regs *regs) // (int dirfd, char *path, struct stat *statbuf, int flag)
+{
+	return virt_newfstatat((int)regs->PARAM1, (char *)regs->PARAM2, (struct stat *)regs->PARAM3, (int)regs->PARAM4);
+}
 #endif
+
+#endif
+
+#if defined(NEED_readlinkat)
 
 static long do_orig_readlinkat(int dirfd, char *path, void *buf, int param1, long param2)
 {
@@ -661,6 +850,17 @@ asmlinkage long virt_readlinkat(int dirfd, char *path, char *buf, size_t bufsiz)
 	return virt_generic(do_orig_readlinkat, 0, dirfd, path, buf, (void *)-1, bufsiz, 0);
 }
 
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_readlinkat(struct pt_regs *regs) // (int dirfd, char *path, char *buf, size_t bufsiz)
+{
+	return virt_readlinkat((int)regs->PARAM1, (char *)regs->PARAM2, (char *)regs->PARAM3, (size_t)regs->PARAM4);
+}
+#endif
+
+#endif
+
+#if defined(NEED_faccessat)
+
 static long do_orig_faccessat(int dirfd, char *path, void *buf, int param1, long param2)
 {
 	return orig_faccessat(dirfd, path, param1);
@@ -671,8 +871,69 @@ asmlinkage long virt_faccessat(int dirfd, char *pathname, int mode)
 	return virt_generic(do_orig_faccessat, 1, dirfd, pathname, NULL, NULL, mode, 0);
 }
 
-#if defined(__x86_64__) || defined(__aarch64__)
+#if defined(USE_64BIT_WRAPPERS)
+asmlinkage long x64_virt_faccessat(struct pt_regs *regs) // (int dirfd, char *pathname, int mode)
+{
+	return virt_faccessat((int)regs->PARAM1, (char *)regs->PARAM2, (int)regs->PARAM3);
+}
+#endif
+
+#endif
+
+#if defined(USE_64BIT_WRAPPERS)
+
+#define PACK_REGS1 \
+	struct pt_regs regs; \
+	regs.PARAM1 = (ulong)path
+
+#define PACK_REGS2 \
+	struct pt_regs regs; \
+	va_list ap; \
+	va_start(ap, path); \
+	regs.PARAM1 = (ulong)path; \
+	regs.PARAM2 = va_arg(ap, ulong); \
+	va_end(ap)
+
+#define PACK_REGS3 \
+	struct pt_regs regs; \
+	va_list ap; \
+	va_start(ap, path); \
+	regs.PARAM1 = (ulong)path; \
+	regs.PARAM2 = va_arg(ap, ulong); \
+	regs.PARAM3 = va_arg(ap, ulong); \
+	va_end(ap)
+
+#define PACK_REGS4 \
+	struct pt_regs regs; \
+	va_list ap; \
+	va_start(ap, path); \
+	regs.PARAM1 = (ulong)path; \
+	regs.PARAM2 = va_arg(ap, ulong); \
+	regs.PARAM3 = va_arg(ap, ulong); \
+	regs.PARAM4 = va_arg(ap, ulong); \
+	va_end(ap)
+
+#define PACK_REGSAT3 \
+	struct pt_regs regs; \
+	va_list ap; \
+	va_start(ap, path); \
+	regs.PARAM1 = (ulong)dirfd; \
+	regs.PARAM2 = (ulong)path; \
+	regs.PARAM3 = va_arg(ap, ulong); \
+	va_end(ap)
+
+#define PACK_REGSAT4 \
+	struct pt_regs regs; \
+	va_list ap; \
+	va_start(ap, path); \
+	regs.PARAM1 = (ulong)dirfd; \
+	regs.PARAM2 = (ulong)path; \
+	regs.PARAM3 = va_arg(ap, ulong); \
+	regs.PARAM4 = va_arg(ap, ulong); \
+	va_end(ap)
+
 #include "wrapper.h"
+
 #endif
 
 #if defined(__i386__) || defined(__x86_64__)
@@ -1034,11 +1295,11 @@ int init_module(void)
 	if (ret)
 		return ret;
 
-#if defined(__x86_64__) || defined(__aarch64__)
-#define PROCESS(name) \
+#if defined(USE_64BIT_WRAPPERS)
+#define PROCESS(name, nargs) \
 	x64_orig_##name = replace_syscall(__NR_##name, x64_virt_##name);
 #else
-#define PROCESS(name) \
+#define PROCESS(name, nargs) \
 	orig_##name = replace_syscall(__NR_##name, virt_##name);
 #endif
 #include "list.h"
@@ -1050,11 +1311,11 @@ void cleanup_module(void)
 {
 	printk(KERN_INFO "Redir cleanup\n");
 
-#if defined (__x86_64__) || defined(__aarch64__)
-#define PROCESS(name) \
+#if defined (USE_64BIT_WRAPPERS)
+#define PROCESS(name, nargs) \
 	replace_syscall(__NR_##name, x64_orig_##name);
 #else
-#define PROCESS(name) \
+#define PROCESS(name, nargs) \
 	replace_syscall(__NR_##name, orig_##name);
 #endif
 #include "list.h"

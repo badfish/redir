@@ -1,7 +1,7 @@
-#!/bin/sh
+#!/bin/bash
 
-TARGET=$(( $(date '+%s') + 15 ))
+TARGET=$(( SECONDS + 15 ))
 
-while [ $(date '+%s') -lt $TARGET ]; do
+while [ $SECONDS -lt $TARGET ]; do
 	./run_test_once.sh
 done

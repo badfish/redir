@@ -1,7 +1,8 @@
-#!/bin/sh
+#!/bin/bash
+
+set -e
 
 BASEDIR=$(readlink -f ${0%/*})
-
 TEMPDIR=$(mktemp -d)
 
 cd $TEMPDIR
@@ -12,10 +13,14 @@ timing() {
 	FILENAME=$1
 
 	n=0
-	TARGET=$(( $(date '+%s') + 15 ))
-	while [ $(date '+%s') -lt $TARGET ]; do
-		cat $FILENAME
-		n=$(( n + 1 ))
+	TARGET=$(( SECONDS + 15 ))
+	while [ $SECONDS -lt $TARGET ]; do
+		[ -f $FILENAME ] || true
+		[ -f $FILENAME ] || true
+		[ -f $FILENAME ] || true
+		[ -f $FILENAME ] || true
+		[ -f $FILENAME ] || true
+		n=$(( n + 5 ))
 	done
 	echo $n
 }
@@ -34,6 +39,7 @@ timing foo.tar#/foo
 timing foo
 timing /.avfs/$TEMPDIR/foo
 timing /.avfs/$TEMPDIR/foo.tar#/foo
+timing foo.tar#/foo
 
 cd $BASEDIR
 rm -rf $TEMPDIR
