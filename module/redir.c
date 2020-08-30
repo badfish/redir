@@ -32,7 +32,16 @@ MODULE_LICENSE("GPL");
 #define OVERLAY_DIR "/.avfs"
 #define OVERLAY_DIR_LEN 6
 
-#define PF_AVFS 0x20000000
+/* process flags change with each kernel version */
+/* ideally we should keep our own array of flags but we */
+/* would have to hook process creation to initialize it */
+#if !defined(PF_EXITPIDONE)
+#define PF_AVFS 0x00000008
+#elif !defined(PF_SPREAD_PAGE) && !defined(PF_MEMSTALL)
+#define PF_AVFS 0x01000000
+#else
+#error "PF_AVFS not available"
+#endif
 
 #define path_ok(pwd) (pwd->d_parent == pwd || !d_unhashed(pwd))
 
@@ -1463,6 +1472,75 @@ static asmlinkage long wrap_virt32_faccessat(struct pt_regs *regs) // (int dirfd
 	va_end(ap)
 
 #include "wrapper.h"
+
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
+
+static char *read_line(struct file *fp)
+{
+	static char buffer[1024];
+	static int start;
+	static int end;
+
+	mm_segment_t fs;
+	char *ret;
+	int n;
+
+	for (;;) {
+		n = start;
+		while (n < end) {
+			if (buffer[n] == '\n') {
+				buffer[n] = '\0';
+				ret = &buffer[start];
+				start = n + 1;
+				return ret;
+			}
+			n++;
+		}
+
+		memmove(&buffer[0], &buffer[start], end - start);
+		end -= start;
+		start = 0;
+
+		fs = get_fs();
+		set_fs(KERNEL_DS);
+		n = vfs_read(fp, &buffer[end], sizeof(buffer) - end, &fp->f_pos);
+		set_fs(fs);
+		if (n == EINTR)
+			continue;
+		if (n <= 0)
+			return 0;
+		end += n;
+	}
+}
+
+unsigned long kallsyms_lookup_name(const char *name)
+{
+	unsigned long addr = 0L;
+	struct file *fp;
+	char *line;
+
+	unsigned long abuf;
+	char nbuf[128];
+
+	fp = filp_open("/proc/kallsyms", O_RDONLY, 0);
+
+	for (;;) {
+		line = read_line(fp);
+		if (line == 0)
+			break;
+
+		if ((sscanf(line, "%lx %*c %127s", &abuf, nbuf) == 2) && strcmp(nbuf, name) == 0) {
+			addr = abuf;
+			break;
+		}
+	};
+
+	filp_close(fp, NULL);
+
+	return addr;
+}
 
 #endif
 

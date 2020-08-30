@@ -3,7 +3,7 @@ LINUX ?= /lib/modules/`uname -r`/build
 obj-m := redir.o
 
 all:
-	make -C $(LINUX) M=`pwd` modules
+	make -C $(LINUX) CONFIG_STACKPROTECTOR=n CONFIG_STACKPROTECTOR_STRONG=n M=`pwd` modules
 
 $(obj)/redir.o: $(obj)/def32.h $(obj)/need32.h $(obj)/need.h $(obj)/wrapper.h
 
