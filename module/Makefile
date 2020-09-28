@@ -8,7 +8,7 @@ all:
 $(obj)/redir.o: $(obj)/def32.h $(obj)/need32.h $(obj)/need.h $(obj)/wrapper.h
 
 HOST_EXTRACFLAGS += -I$(LINUX)
-hostprogs-y := codegen
+hostprogs := codegen
 
 $(obj)/def32.h: $(obj)/codegen
 	$(obj)/codegen > $(obj)/def32.h

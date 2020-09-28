@@ -1483,7 +1483,6 @@ static char *read_line(struct file *fp)
 	static int start;
 	static int end;
 
-	mm_segment_t fs;
 	char *ret;
 	int n;
 
@@ -1503,10 +1502,7 @@ static char *read_line(struct file *fp)
 		end -= start;
 		start = 0;
 
-		fs = get_fs();
-		set_fs(KERNEL_DS);
-		n = vfs_read(fp, &buffer[end], sizeof(buffer) - end, &fp->f_pos);
-		set_fs(fs);
+		n = kernel_read(fp, &buffer[end], sizeof(buffer) - end, &fp->f_pos);
 		if (n == EINTR)
 			continue;
 		if (n <= 0)
@@ -1623,6 +1619,7 @@ static int set_syscall_entry(void **address, void *value)
 	/* sys call table is not ro; hence it is not clear whether it works */
 	/* it *should* work for 32-bit arm, but it doesn't for unknown reason */
 	pgd_t *pgd;
+	p4d_t *p4d;
 	pud_t *pud;
 	pmd_t *pmd;
 	pte_t *ptep;
@@ -1644,7 +1641,12 @@ static int set_syscall_entry(void **address, void *value)
 		printk(KERN_ERR "Bad pgd when replacing system call\n");
 		return -EINVAL;
 	}
-	pud = pud_offset(pgd, (ulong)address);
+	p4d = p4d_offset(pgd, (ulong)address);
+	if (p4d_none(*p4d) || p4d_bad(*p4d)) {
+		printk(KERN_ERR "Bad p4d when replacing system call\n");
+		return -EINVAL;
+	}
+	pud = pud_offset(p4d, (ulong)address);
 	if (pud_none(*pud) || pud_bad(*pud)) {
 		printk(KERN_ERR "Bad pud when replacing system call\n");
 		return -EINVAL;
